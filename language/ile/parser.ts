@@ -14,7 +14,7 @@ import type { tablePromise, includeFilePromise, IncludeFetchResult } from "../pa
 
 const HALF_HOUR = (30 * 60 * 1000);
 
-export type TableDetail = { [name: string]: { fetched: number, fetching?: boolean, recordFormats: Declaration[] } };
+export type TableDetail = { [name: string]: { fetched: number, fetching?: Promise<Declaration[]>, recordFormats: Declaration[] } };
 export interface ParseOptions { withIncludes?: boolean, ignoreCache?: boolean, collectReferences?: boolean };
 
 const PROGRAMPARMS_NAME = `PROGRAMPARMS`;
@@ -49,8 +49,9 @@ export default class Parser {
     const now = Date.now();
 
     if (this.tables[existingVersion]) {
-      // We use this to make sure we aren't running this all over the place
-      if (this.tables[existingVersion].fetching) return [];
+      // Share the fetch already running instead of returning no fields
+      const fetching = this.tables[existingVersion].fetching;
+      if (fetching) return (await fetching).map(d => d.clone());
 
       // If we still have a cached version, let's use that
       if (now <= (this.tables[existingVersion].fetched + HALF_HOUR)) {
@@ -58,31 +59,26 @@ export default class Parser {
       }
     }
 
+    const fetching = this.tableFetch(table, aliases).catch(() => {
+      // Failed. Don't fetch it again
+      return [] as Declaration[];
+    });
+
     this.tables[existingVersion] = {
-      fetching: true,
+      fetching,
       fetched: 0,
       recordFormats: []
     };
 
-    let newDefs: Declaration[];
+    const newDefs = await fetching;
 
-    try {
-      newDefs = await this.tableFetch(table, aliases);
-
+    // The cache may have been cleared while fetching
+    if (this.tables[existingVersion]?.fetching === fetching) {
       this.tables[existingVersion] = {
         fetched: now,
         recordFormats: newDefs
       };
-    } catch (e) {
-      // Failed. Don't fetch it again
-      this.tables[existingVersion] = {
-        fetched: now,
-        recordFormats: []
-      };
-      newDefs = [];
     }
-
-    this.tables[existingVersion].fetching = false;
 
     return newDefs.map(d => d.clone());
   }
