@@ -1449,3 +1449,44 @@ test('missing subroutines #443', async () => {
   expect(subroutines[0].name).toBe('PROCRC');
   expect(subroutines[1].name).toBe('ADDSUB');
 });
+test(`*LIKE DEFINE with length adjustment`, async () => {
+  const lines = [
+    `     FEMPLOYEE  IF   E           K DISK`,
+    `     D wkName          S             10`,
+    `     C                   Z-ADD     0             wkTot             9 2`,
+    `     C     *LIKE         DEFINE    SALARY        BIGSAL           +5`,
+    `     C     *LIKE         DEFINE    SALARY        SAMESAL`,
+    `     C     *LIKE         DEFINE    SALARY        SMALSAL          -2`,
+    `     C     *LIKE         DEFINE    wkName        LONGNAME         +3`,
+    `     C     *LIKE         DEFINE    wkTot         WKTOT2           +1`,
+    `     C     *LIKE         DEFINE    LATERFLD      LATERW           +5`,
+    `     C                   Z-ADD     0             LATERFLD         10 4`,
+    `     C                   EVAL      BIGSAL = SALARY * 2`,
+  ].join(`\n`);
+
+  const cache = assertCache(await parser.getDocs(uri, lines, { ignoreCache: true, withIncludes: true, collectReferences: true }));
+
+  const salary = assertFound(cache.find(`SALARY`), `SALARY`);
+  expect(salary.keyword[`PACKED`]).toBe(`9:2`);
+
+  const bigSal = assertFound(cache.find(`BIGSAL`), `BIGSAL`);
+  expect(bigSal.keyword[`CHAR`]).toBeUndefined();
+  expect(bigSal.keyword[`PACKED`]).toBe(`14:2`);
+  expect(bigSal.references.length).toBe(2);
+
+  const sameSal = assertFound(cache.find(`SAMESAL`), `SAMESAL`);
+  expect(sameSal.keyword[`PACKED`]).toBe(`9:2`);
+
+  const smalSal = assertFound(cache.find(`SMALSAL`), `SMALSAL`);
+  expect(smalSal.keyword[`PACKED`]).toBe(`7:2`);
+
+  const longName = assertFound(cache.find(`LONGNAME`), `LONGNAME`);
+  expect(longName.keyword[`CHAR`]).toBe(`13`);
+
+  const wkTot2 = assertFound(cache.find(`WKTOT2`), `WKTOT2`);
+  expect(wkTot2.keyword[`PACKED`]).toBe(`10:2`);
+
+  // Referenced field is defined after the *LIKE DEFINE: resolved at the end of the parse
+  const laterW = assertFound(cache.find(`LATERW`), `LATERW`);
+  expect(laterW.keyword[`PACKED`]).toBe(`15:4`);
+});

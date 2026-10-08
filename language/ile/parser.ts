@@ -6,7 +6,7 @@ import Cache from "../models/cache";
 import Declaration from "../models/declaration";
 
 import oneLineTriggers from "../models/oneLineTriggers";
-import { parseFLine, parseCLine, parsePLine, parseDLine, getPrettyType, prettyTypeFromDSpecTokens, parseISpec, prettyTypeFromISpecTokens } from "../models/fixed";
+import { parseFLine, parseCLine, parsePLine, parseDLine, getPrettyType, prettyTypeFromDSpecTokens, parseISpec, prettyTypeFromISpecTokens, getLikeDefineType } from "../models/fixed";
 import { Token } from "./types";
 import { Keywords } from "./parserTypes";
 import { NO_NAME } from "./statement";
@@ -220,6 +220,24 @@ export default class Parser {
 
     // Global scope bits
     scopes.push(new Cache());
+
+    /** `*LIKE DEFINE` fields whose referenced field type was not known when they were declared */
+    let pendingLikeDefines: { def: Declaration, refName: string, adjustment?: string, line: number }[] = [];
+
+    const resolveLikeDefine = (refName: string, line: number, adjustment?: string): Keywords | undefined => {
+      let name = refName;
+      // Follow LIKE chains (e.g. D-spec LIKE keyword) a few levels deep
+      for (let depth = 0; depth < 5; depth++) {
+        const ref = scopes[0].findDefinition(line, name);
+        if (!ref) return;
+
+        const type = getLikeDefineType(ref.keyword, adjustment);
+        if (type) return type;
+
+        if (typeof ref.keyword[`LIKE`] !== `string`) return;
+        name = ref.keyword[`LIKE`] as string;
+      }
+    };
 
     const getObjectName = (objectName: string, keywords: Keywords): string => {
 
@@ -1702,7 +1720,37 @@ export default class Parser {
                   ...fromToken(cSpec.result),
                 );
 
-                if (cSpec.result && cSpec.fieldLength) {
+                const isLikeDefine = cSpec.opcode?.value === `DEFINE` && cSpec.factor1?.value.toUpperCase() === `*LIKE`;
+
+                if (isLikeDefine) {
+                  // *LIKE DEFINE: the result field takes the attributes of factor 2,
+                  // with the length (positions 64-68) being an optional +/- adjustment
+                  if (cSpec.result && cSpec.factor2 && !scopes[0].findDefinition(lineNumber, cSpec.result.value)) {
+                    const refName = cSpec.factor2.value;
+                    const adjustment = cSpec.fieldLength?.value;
+
+                    currentSub = new Declaration(`variable`);
+                    currentSub.name = cSpec.result.value;
+                    currentSub.position = {
+                      path: fileUri,
+                      range: cSpec.result.range
+                    };
+                    currentSub.range = {
+                      start: lineNumber,
+                      end: lineNumber
+                    };
+
+                    const resolved = resolveLikeDefine(refName, lineNumber, adjustment);
+                    if (resolved) {
+                      currentSub.keyword = resolved;
+                    } else {
+                      currentSub.keyword = { LIKE: refName };
+                      pendingLikeDefines.push({ def: currentSub, refName, adjustment, line: lineNumber });
+                    }
+
+                    scope.addSymbol(currentSub);
+                  }
+                } else if (cSpec.result && cSpec.fieldLength) {
                   // This means we need to dynamically define this field
                   const fieldName = cSpec.result.value;
                   // Don't redefine this field.
@@ -2113,6 +2161,21 @@ export default class Parser {
     }
 
     await parseContent(workingUri, baseContent);
+
+    // Resolve *LIKE DEFINE fields that referenced fields defined later in the source
+    let resolvedSome = true;
+    while (pendingLikeDefines.length > 0 && resolvedSome) {
+      resolvedSome = false;
+      pendingLikeDefines = pendingLikeDefines.filter(pending => {
+        const resolved = resolveLikeDefine(pending.refName, pending.line, pending.adjustment);
+        if (resolved) {
+          pending.def.keyword = resolved;
+          resolvedSome = true;
+          return false;
+        }
+        return true;
+      });
+    }
 
     if (scopes.length > 0) {
       scopes[0].keyword = Parser.expandKeywords(Parser.getTokens(globalKeyword));

@@ -84,6 +84,32 @@ export function parseCLine(lineNumber: number, lineIndex: number, content: strin
   };
 }
 
+const LIKE_ADJUSTABLE_TYPES = [`CHAR`, `VARCHAR`, `UCS2`, `VARUCS2`, `GRAPH`, `VARGRAPH`, `PACKED`, `ZONED`, `BINDEC`];
+const LIKE_TYPES = [...LIKE_ADJUSTABLE_TYPES, `INT`, `UNS`, `FLOAT`, `IND`, `DATE`, `TIME`, `TIMESTAMP`, `POINTER`];
+
+/**
+ * Builds the type keywords for a `*LIKE DEFINE` result field, given the keywords
+ * of the referenced field and the optional length adjustment (e.g. `+5`, `-2`).
+ * Returns undefined when the referenced field has no known type yet.
+ */
+export function getLikeDefineType(referenceKeywords: Keywords, adjustment?: string): Keywords | undefined {
+  const type = Object.keys(referenceKeywords).find(key => LIKE_TYPES.includes(key.toUpperCase()));
+  if (!type) return;
+
+  const value = referenceKeywords[type];
+  const delta = adjustment ? parseInt(adjustment.replace(/\s/g, ``)) : NaN;
+
+  if (typeof value === `string` && !isNaN(delta) && LIKE_ADJUSTABLE_TYPES.includes(type.toUpperCase())) {
+    const [length, ...rest] = value.split(`:`);
+    const newLength = parseInt(length) + delta;
+    if (!isNaN(newLength)) {
+      return { [type]: [String(newLength), ...rest].join(`:`) };
+    }
+  }
+
+  return { [type]: value };
+}
+
 export function parseDLine(lineNumber: number, lineIndex: number, content: string) {
   content = content.padEnd(80);
   const longForm = content.substring(6).trimEnd();
