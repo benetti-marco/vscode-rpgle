@@ -79,7 +79,8 @@ export function buildRequestHandlers(client: LanguageClient) {
 
 			if (config && content) {
 				const files = [config?.currentLibrary, ...config?.libraryList!]
-					.filter(l => l !== undefined)
+					// The current library can be an empty string: resolving it fails and the include is not found
+					.filter(l => l)
 					.map(l => ({ name: sourceFile, library: l! }));
 
 				try {
